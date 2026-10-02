@@ -127,6 +127,22 @@ function nfsVolumes(data, exportRules) {
   });
 }
 
+function targetList(value) {
+  const targets = String(value || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item && item !== "-");
+  if (!targets.length) return "-";
+  return `<div class="target-list">${targets.map((target) => `<span>${escapeHtml(target)}</span>`).join(" ")}</div>`;
+}
+
+function lunTypeDetails(row) {
+  const type = valueText(row.type);
+  const reserve = valueText(row.spaceReserve || (type === "thick" ? "enabled" : type === "thin" ? "disabled" : "-"));
+  const allocation = valueText(row.spaceAllocation);
+  return `${type} (${reserve} / ${allocation})`;
+}
+
 function cellRaw(column, row) {
   if (typeof column.value === "function") return column.value(row);
   return row[column.value];
@@ -367,35 +383,34 @@ function renderTables() {
   table("#lifTable", [
     { label: "Vserver", value: "vserver" },
     { label: "LIF", value: "lif" },
-    { label: "Role", value: "role" },
-    { label: "Protocol", value: "protocol" },
-    { label: "Home", value: (row) => row.homeDisplay || row.home },
-    { label: "Current", value: (row) => row.currentDisplay || row.current },
-    { label: "Failover Group", value: "failoverGroup" },
-    { label: "Failover Policy", value: "failoverPolicy" },
+    { label: "Home Port", value: (row) => row.homeDisplay || row.home },
+    { label: "Address", value: "address" },
     { label: "Netmask", value: "netmask" },
     { label: "Gateway", value: "gateway" },
-    { label: "Address", value: "address" },
     { label: "Status", value: (row) => badge(row.status, row.status === "up" ? "good" : "warn"), sortValue: "status", html: true },
+    { label: "Current Port", value: (row) => row.currentDisplay || row.current },
+    { label: "Failover Group", value: "failoverGroup" },
+    { label: "Failover Policy", value: "failoverPolicy" },
+    { label: "Role", value: "role" },
+    { label: "Protocol", value: "protocol" },
   ], report.networkInterfaces, "없음", { searchable: true });
 
   table("#portTable", [
     { label: "Node", value: "node" },
     { label: "Port", value: (row) => row.portDisplay || row.port },
-    { label: "Usage", value: (row) => badge(row.usage, row.usage === "사용" ? "good" : row.usage === "미사용" ? "muted" : "warn"), sortValue: "usage", html: true },
-    { label: "LIFs", value: "lifCount" },
     { label: "Link", value: "link" },
     { label: "Speed", value: "speed" },
-    { label: "Broadcast Domain", value: "broadcastDomain" },
     { label: "Health", value: "health" },
+    { label: "Broadcast Domain", value: "broadcastDomain" },
+    { label: "Usage", value: (row) => badge(row.usage, row.usage === "사용" ? "good" : row.usage === "미사용" ? "muted" : "warn"), sortValue: "usage", html: true },
+    { label: "LIFs", value: "lifCount" },
   ], report.networkPorts, "없음", { searchable: true });
 
   table("#failoverGroupTable", [
     { label: "Vserver", value: "vserver" },
     { label: "Failover Group", value: "group" },
     { label: "Broadcast Domain", value: "broadcastDomain" },
-    { label: "Target Count", value: "targetCount" },
-    { label: "Targets", value: "targets" },
+    { label: "Targets", value: (row) => targetList(row.targets), sortValue: "targets", html: true },
   ], report.failoverGroups, "Failover group 정보: 없음", { searchable: true });
 
   table("#fcpAdapterTable", [
@@ -439,14 +454,14 @@ function renderTables() {
   const protocolLifColumns = [
     { label: "Vserver", value: "vserver" },
     { label: "LIF", value: "lif" },
-    { label: "Role", value: "role" },
-    { label: "Protocol", value: "protocol" },
-    { label: "Home", value: (row) => row.homeDisplay || row.home },
-    { label: "Current", value: (row) => row.currentDisplay || row.current },
+    { label: "Home Port", value: (row) => row.homeDisplay || row.home },
+    { label: "Address", value: "address" },
     { label: "Netmask", value: "netmask" },
     { label: "Gateway", value: "gateway" },
-    { label: "Address", value: "address" },
     { label: "Status", value: (row) => badge(row.status, row.status === "up" ? "good" : "warn"), sortValue: "status", html: true },
+    { label: "Current Port", value: (row) => row.currentDisplay || row.current },
+    { label: "Role", value: "role" },
+    { label: "Protocol", value: "protocol" },
   ];
   const protocolLunColumns = [
     { label: "Aggregate", value: "aggregate" },
@@ -456,24 +471,23 @@ function renderTables() {
     { label: "LUN Path", value: "path" },
     { label: "Size", value: "size" },
     { label: "OS Type", value: "ostype" },
-    { label: "Type", value: "type" },
+    { label: "Type (Space Reserve / Space Allocation)", value: (row) => lunTypeDetails(row) },
     { label: "Mapped", value: "mapped" },
     { label: "Igroup", value: "igroup" },
     { label: "LUN ID", value: "lunId" },
-    { label: "Reporting Nodes", value: "reportingNodes" },
     { label: "State", value: "state" },
     { label: "Protocol", value: "protocol" },
+    { label: "Reporting Nodes", value: "reportingNodes" },
   ];
   const protocolIgroupColumns = [
     { label: "Vserver", value: "vserver" },
     { label: "Igroup", value: "igroup" },
-    { label: "Protocol", value: "protocol" },
     { label: "OS Type", value: "ostype" },
-    { label: "Mapped LUNs", value: "mappedLuns" },
     { label: "Initiators", value: "initiators" },
     { label: "Init Details", value: "initDetails" },
+    { label: "Mapped LUNs", value: "mappedLuns" },
+    { label: "Protocol", value: "protocol" },
     { label: "Portset", value: "boundPortset" },
-    { label: "Child Igroups", value: "childIgroups" },
   ];
 
   const nfsLifs = report.networkInterfaces.filter((row) => hasProtocol(row, "nfs"));
@@ -523,72 +537,49 @@ function renderTables() {
   table("#aggrTable", [
     { label: "Node", value: "node" },
     { label: "Aggregate", value: "name" },
-    { label: "Root", value: "root" },
-    { label: "Disk Type", value: "diskType" },
-    { label: "Disk Count", value: "diskCount" },
-    { label: "Max RAID", value: "maxRaid" },
     { label: "Usable Size", value: "usableSize" },
     { label: "Available", value: "available" },
     { label: "Used %", value: "usedPercent" },
+    { label: "Allocated Volume", value: "allocatedVolume" },
+    { label: "Allocated LUN", value: "allocatedLun" },
+    { label: "Disk Type", value: "diskType" },
     { label: "RAID", value: "raidType" },
+    { label: "Max RAID", value: "maxRaid" },
+    { label: "Disk Count", value: "diskCount" },
   ], report.aggregates, "없음", { searchable: true });
 
   table("#spareTable", [
     { label: "Node", value: "node" },
     { label: "Disk", value: "name" },
     { label: "Kind", value: "kind" },
-    { label: "Model", value: "model" },
     { label: "Size", value: "size" },
-    { label: "Partition", value: "partition" },
-    { label: "State", value: "state" },
+    { label: "Model", value: "model" },
     { label: "Serial", value: "serial" },
+    { label: "State", value: "state" },
+    { label: "Partition", value: "partition" },
   ], report.spareDisks, "Spare disk 없음", { searchable: true });
 
   table("#volumeTable", [
     { label: "Aggregate", value: "aggregate" },
     { label: "Vserver", value: "vserver" },
     { label: "Volume", value: "volume" },
-    { label: "Junction Path", value: "junctionPath" },
-    { label: "Volume Type", value: "volumeType" },
     { label: "Size", value: "size" },
-    { label: "space-guarantee", value: "type" },
-    { label: "Security Style", value: "securityStyle" },
-    { label: "Inode %", value: "inodePercent" },
     { label: "Used %", value: "usedPercent" },
-    { label: "Snapshot Policy", value: "snapshotPolicy" },
-    { label: "Snap Space %", value: "snapshotSpace" },
-    { label: "Schedule / Count", value: (row) => (row.schedules || []).length ? row.schedules.map((s) => `${s.schedule}:${s.count}`).join(", ") : "-" },
     { label: "State", value: "state" },
+    { label: "Junction Path", value: "junctionPath" },
+    { label: "Snapshot Policy", value: "snapshotPolicy" },
+    { label: "Schedule / Count", value: (row) => (row.schedules || []).length ? row.schedules.map((s) => `${s.schedule}:${s.count}`).join(", ") : "-" },
+    { label: "Snap Space %", value: "snapshotSpace" },
+    { label: "Volume Type", value: "volumeType" },
+    { label: "space-guarantee", value: "type" },
+    { label: "Inode %", value: "inodePercent" },
+    { label: "Security Style", value: "securityStyle" },
+    { label: "Fractional Reserve", value: "fractionalReserve" },
   ], report.volumes, "없음", { searchable: true });
 
-  table("#lunTable", [
-    { label: "Aggregate", value: "aggregate" },
-    { label: "Vserver", value: "vserver" },
-    { label: "Volume", value: "volume" },
-    { label: "LUN", value: "lun" },
-    { label: "LUN Path", value: "path" },
-    { label: "Size", value: "size" },
-    { label: "OS Type", value: "ostype" },
-    { label: "Type", value: "type" },
-    { label: "Mapped", value: "mapped" },
-    { label: "Igroup", value: "igroup" },
-    { label: "LUN ID", value: "lunId" },
-    { label: "Reporting Nodes", value: "reportingNodes" },
-    { label: "State", value: "state" },
-    { label: "Protocol", value: "protocol" },
-  ], report.luns, "LUN 구성 정보: 없음", { searchable: true });
+  table("#lunTable", protocolLunColumns, report.luns, "LUN 구성 정보: 없음", { searchable: true });
 
-  table("#igroupTable", [
-    { label: "Vserver", value: "vserver" },
-    { label: "Igroup", value: "igroup" },
-    { label: "Protocol", value: "protocol" },
-    { label: "OS Type", value: "ostype" },
-    { label: "Mapped LUNs", value: "mappedLuns" },
-    { label: "Initiators", value: "initiators" },
-    { label: "Init Details", value: "initDetails" },
-    { label: "Portset", value: "boundPortset" },
-    { label: "Child Igroups", value: "childIgroups" },
-  ], report.igroups, "Igroup 구성 정보: 없음", { searchable: true });
+  table("#igroupTable", protocolIgroupColumns, report.igroups, "Igroup 구성 정보: 없음", { searchable: true });
 
   table("#snapshotTable", [
     { label: "Vserver", value: "vserver" },
@@ -613,13 +604,13 @@ function renderTables() {
     { label: "State", value: "state" },
     { label: "Status", value: "status" },
     { label: "Healthy", value: "healthy" },
-    { label: "Policy", value: "policy" },
-    { label: "Schedule", value: "schedule" },
-    { label: "Policy Schedule", value: "policySchedule" },
-    { label: "Policy Rules", value: "policyRules" },
     { label: "Cluster Peer", value: "clusterPeer" },
     { label: "Vserver", value: "vserver" },
     { label: "Peer Vserver", value: "peerVserver" },
+    { label: "Policy", value: "policy" },
+    { label: "Schedule", value: "schedule" },
+    { label: "Policy Rules", value: "policyRules" },
+    { label: "Policy Schedule", value: "policySchedule" },
     { label: "Lag", value: "lagTime" },
     { label: "Last Transfer", value: "lastTransfer" },
   ], report.snapmirrors, "SnapMirror 구성 정보: 없음", { searchable: true });
@@ -651,18 +642,18 @@ function renderTables() {
 
   table("#clusterPeerTable", [
     { label: "Peer Cluster", value: "cluster" },
-    { label: "Addresses", value: "peerAddresses" },
     { label: "Availability", value: "availability" },
+    { label: "Address", value: "peerAddresses" },
+    { label: "Address Family", value: "addressFamily" },
     { label: "Healthy", value: "pairsHealthy" },
     { label: "Unhealthy", value: "pairsUnhealthy" },
     { label: "Auth", value: "authentication" },
     { label: "Encryption", value: "encryption" },
-    { label: "Address Family", value: "addressFamily" },
     { label: "Version", value: "version" },
   ], report.clusterPeers, "cluster peer show 정보: 없음", { searchable: true });
 
   table("#vserverPeerTable", [
-    { label: "Local Vserver", value: "localVserver" },
+    { label: "Vserver", value: "localVserver" },
     { label: "Peer Vserver", value: "peerVserver" },
     { label: "Real Peer", value: "realPeerVserver" },
     { label: "Cluster Peer", value: "clusterPeer" },
@@ -680,7 +671,6 @@ function renderTables() {
   ], report.eventLogs, "alert/error/emergency event 없음", { searchable: true });
 
   table("#licenseTable", [
-    { label: "Node / Serial", value: "group" },
     { label: "Node", value: "node" },
     { label: "Serial", value: "serial" },
     { label: "Package", value: "package" },

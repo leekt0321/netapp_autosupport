@@ -393,6 +393,24 @@ h3 {
   color: var(--surface);
 }
 
+.target-list {
+  display: grid;
+  gap: 4px;
+}
+
+.target-list span {
+  width: max-content;
+  max-width: 100%;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
 .shelf-list {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));

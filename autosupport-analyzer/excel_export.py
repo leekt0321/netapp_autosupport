@@ -118,6 +118,30 @@ def port_speed(value: Any) -> str:
     return text
 
 
+def natural_key(value: Any) -> list[tuple[int, Any]]:
+    return [(0, int(part)) if part.isdigit() else (1, part.lower()) for part in re.split(r"(\d+)", safe_text(value))]
+
+
+def failover_target_rows(data: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for item in data:
+        targets = [target.strip() for target in safe_text(item.get("targets")).split(",") if target.strip() and target.strip() != "-"]
+        if not targets:
+            rows.append(item)
+            continue
+        rows.extend({**item, "targets": target} for target in targets)
+    return rows
+
+
+def lun_type_details(row: dict[str, Any]) -> str:
+    lun_type = safe_text(row.get("type"))
+    reserve = safe_text(row.get("spaceReserve"))
+    if reserve == "-":
+        reserve = "enabled" if lun_type == "thick" else "disabled" if lun_type == "thin" else "-"
+    allocation = safe_text(row.get("spaceAllocation"))
+    return f"{lun_type} ({reserve} / {allocation})"
+
+
 def ontap_short(value: Any) -> str:
     text = safe_text(value)
     match = re.search(r"Release\s+([^:]+)", text)
@@ -210,14 +234,24 @@ def build_hardware(report: dict[str, Any]) -> list[list[Any]]:
 
 def build_network(report: dict[str, Any]) -> list[list[Any]]:
     rows: list[list[Any]] = []
-    add_table(rows, "Network Interface", ["Vserver", "LIF", "Role", "Protocol", "Home Port", "Current Port", "Failover Group", "Failover Policy", "Netmask", "Gateway", "Address", "Status"], report.get("networkInterfaces", []), [
-        ("Vserver", "vserver"), ("LIF", "lif"), ("Role", "role"), ("Protocol", "protocol"),
-        ("Home Port", lambda r: r.get("homeDisplay") or r.get("home")), ("Current Port", lambda r: r.get("currentDisplay") or r.get("current")), ("Failover Group", "failoverGroup"), ("Failover Policy", "failoverPolicy"), ("Netmask", "netmask"), ("Gateway", "gateway"), ("Address", "address"), ("Status", "status"),
+    add_table(rows, "Network Interface", ["Vserver", "LIF", "Home Port", "Address", "Netmask", "Gateway", "Status", "Current Port", "Failover Group", "Failover Policy", "Role", "Protocol"], report.get("networkInterfaces", []), [
+        ("Vserver", "vserver"), ("LIF", "lif"), ("Home Port", lambda r: r.get("homeDisplay") or r.get("home")), ("Address", "address"), ("Netmask", "netmask"), ("Gateway", "gateway"), ("Status", "status"),
+        ("Current Port", lambda r: r.get("currentDisplay") or r.get("current")), ("Failover Group", "failoverGroup"), ("Failover Policy", "failoverPolicy"), ("Role", "role"), ("Protocol", "protocol"),
     ])
-    add_table(rows, "Network Port", ["Node", "Port", "Usage", "LIFs", "Link", "Speed", "Broadcast Domain", "Health"], report.get("networkPorts", []), [
-        ("Node", "node"), ("Port", lambda r: r.get("portDisplay") or r.get("port")), ("Usage", "usage"), ("LIFs", "lifCount"), ("Link", "link"), ("Speed", lambda r: port_speed(r.get("speed"))), ("Broadcast Domain", "broadcastDomain"), ("Health", "health"),
-    ])
-    add_table(rows, "Failover Group", ["Vserver", "Failover Group", "Broadcast Domain", "Targets"], report.get("failoverGroups", []), [
+    port_headers = ["Node", "Port", "Link", "Speed", "Health", "Broadcast Domain", "Usage", "LIFs"]
+    port_columns = [
+        ("Node", "node"), ("Port", lambda r: r.get("portDisplay") or r.get("port")), ("Link", "link"), ("Speed", lambda r: port_speed(r.get("speed"))), ("Health", "health"), ("Broadcast Domain", "broadcastDomain"), ("Usage", "usage"), ("LIFs", "lifCount"),
+    ]
+    ports_by_node: dict[str, list[dict[str, Any]]] = {}
+    for port in report.get("networkPorts", []):
+        ports_by_node.setdefault(safe_text(port.get("node")), []).append(port)
+    if ports_by_node:
+        for node in sorted(ports_by_node, key=natural_key):
+            node_ports = sorted(ports_by_node[node], key=lambda row: natural_key(row.get("portDisplay") or row.get("port")))
+            add_table(rows, f"Network Port · {node}", port_headers, node_ports, port_columns)
+    else:
+        add_table(rows, "Network Port", port_headers, [], port_columns)
+    add_table(rows, "Failover Group", ["Vserver", "Failover Group", "Broadcast Domain", "Targets"], failover_target_rows(report.get("failoverGroups", [])), [
         ("Vserver", "vserver"), ("Failover Group", "group"), ("Broadcast Domain", "broadcastDomain"), ("Targets", "targets"),
     ])
     return rows
@@ -236,19 +270,19 @@ def build_cifs(report: dict[str, Any]) -> list[list[Any]]:
 
 def build_storage(report: dict[str, Any]) -> list[list[Any]]:
     rows: list[list[Any]] = []
-    add_table(rows, "Aggregate", ["Node", "Aggregate", "Root", "Disk Type", "Disk Count", "Max RAID", "Usable Size", "Available", "Used %", "Allocated Volume", "Allocated LUN", "RAID"], report.get("aggregates", []), [
-        ("Node", "node"), ("Aggregate", "name"), ("Root", "root"), ("Disk Type", "diskType"), ("Disk Count", "diskCount"), ("Max RAID", "maxRaid"), ("Usable Size", "usableSize"), ("Available", "available"), ("Used %", "usedPercent"), ("Allocated Volume", "allocatedVolume"), ("Allocated LUN", "allocatedLun"), ("RAID", "raidType"),
+    add_table(rows, "Aggregate", ["Node", "Aggregate", "Usable Size", "Available", "Used %", "Allocated Volume", "Allocated LUN", "Disk Type", "RAID", "Max RAID", "Disk Count"], report.get("aggregates", []), [
+        ("Node", "node"), ("Aggregate", "name"), ("Usable Size", "usableSize"), ("Available", "available"), ("Used %", "usedPercent"), ("Allocated Volume", "allocatedVolume"), ("Allocated LUN", "allocatedLun"), ("Disk Type", "diskType"), ("RAID", "raidType"), ("Max RAID", "maxRaid"), ("Disk Count", "diskCount"),
     ])
-    add_table(rows, "Spare Disk", ["Node", "Disk", "Kind", "Model", "Size", "Partition", "State", "Serial"], report.get("spareDisks", []), [
-        ("Node", "node"), ("Disk", "name"), ("Kind", "kind"), ("Model", "model"), ("Size", "size"), ("Partition", "partition"), ("State", "state"), ("Serial", "serial"),
+    add_table(rows, "Spare Disk", ["Node", "Disk", "Kind", "Size", "Model", "Serial", "State", "Partition"], report.get("spareDisks", []), [
+        ("Node", "node"), ("Disk", "name"), ("Kind", "kind"), ("Size", "size"), ("Model", "model"), ("Serial", "serial"), ("State", "state"), ("Partition", "partition"),
     ])
     return rows
 
 
 def build_volume(report: dict[str, Any]) -> list[list[Any]]:
     rows: list[list[Any]] = []
-    add_table(rows, "Volume", ["Aggregate", "Vserver", "Volume", "Junction Path", "Volume Type", "Size", "space-guarantee", "Security Style", "Inode %", "Used %", "Fractional Reserve", "Snapshot Policy", "Snap Space %", "Schedule / Count", "State"], report.get("volumes", []), [
-        ("Aggregate", "aggregate"), ("Vserver", "vserver"), ("Volume", "volume"), ("Junction Path", "junctionPath"), ("Volume Type", "volumeType"), ("Size", "size"), ("space-guarantee", "type"), ("Security Style", "securityStyle"), ("Inode %", "inodePercent"), ("Used %", "usedPercent"), ("Fractional Reserve", "fractionalReserve"), ("Snapshot Policy", "snapshotPolicy"), ("Snap Space %", "snapshotSpace"), ("Schedule / Count", lambda r: join_schedule(r.get("schedules"))), ("State", "state"),
+    add_table(rows, "Volume", ["Aggregate", "Vserver", "Volume", "Size", "Used %", "State", "Junction Path", "Snapshot Policy", "Schedule / Count", "Snap Space %", "Volume Type", "space-guarantee", "Inode %", "Security Style", "Fractional Reserve"], report.get("volumes", []), [
+        ("Aggregate", "aggregate"), ("Vserver", "vserver"), ("Volume", "volume"), ("Size", "size"), ("Used %", "usedPercent"), ("State", "state"), ("Junction Path", "junctionPath"), ("Snapshot Policy", "snapshotPolicy"), ("Schedule / Count", lambda r: join_schedule(r.get("schedules"))), ("Snap Space %", "snapshotSpace"), ("Volume Type", "volumeType"), ("space-guarantee", "type"), ("Inode %", "inodePercent"), ("Security Style", "securityStyle"), ("Fractional Reserve", "fractionalReserve"),
     ])
     return rows
 
@@ -264,22 +298,22 @@ def nfs_rule_allows_nfs(rule: dict[str, Any]) -> bool:
 
 
 def add_protocol_lifs(rows: list[list[Any]], title: str, interfaces: list[dict[str, Any]]) -> None:
-    add_table(rows, title, ["Vserver", "LIF", "Role", "Protocol", "Home Port", "Current Port", "Netmask", "Gateway", "Address", "Status"], interfaces, [
-        ("Vserver", "vserver"), ("LIF", "lif"), ("Role", "role"), ("Protocol", "protocol"),
-        ("Home Port", lambda r: r.get("homeDisplay") or r.get("home")), ("Current Port", lambda r: r.get("currentDisplay") or r.get("current")),
-        ("Netmask", "netmask"), ("Gateway", "gateway"), ("Address", "address"), ("Status", "status"),
+    add_table(rows, title, ["Vserver", "LIF", "Home Port", "Address", "Netmask", "Gateway", "Status", "Current Port", "Role", "Protocol"], interfaces, [
+        ("Vserver", "vserver"), ("LIF", "lif"), ("Home Port", lambda r: r.get("homeDisplay") or r.get("home")), ("Address", "address"),
+        ("Netmask", "netmask"), ("Gateway", "gateway"), ("Status", "status"), ("Current Port", lambda r: r.get("currentDisplay") or r.get("current")),
+        ("Role", "role"), ("Protocol", "protocol"),
     ])
 
 
 def add_protocol_luns(rows: list[list[Any]], luns: list[dict[str, Any]]) -> None:
-    add_table(rows, "LUN", ["Aggregate", "Vserver", "Volume", "LUN", "LUN Path", "Size", "OS Type", "Type", "Mapped", "Igroup", "LUN ID", "Reporting Nodes", "State", "Protocol"], luns, [
-        ("Aggregate", "aggregate"), ("Vserver", "vserver"), ("Volume", "volume"), ("LUN", "lun"), ("LUN Path", "path"), ("Size", "size"), ("OS Type", "ostype"), ("Type", "type"), ("Mapped", "mapped"), ("Igroup", "igroup"), ("LUN ID", "lunId"), ("Reporting Nodes", "reportingNodes"), ("State", "state"), ("Protocol", "protocol"),
+    add_table(rows, "LUN", ["Aggregate", "Vserver", "Volume", "LUN", "LUN Path", "Size", "OS Type", "Type (Space Reserve / Space Allocation)", "Mapped", "Igroup", "LUN ID", "State", "Protocol", "Reporting Nodes"], luns, [
+        ("Aggregate", "aggregate"), ("Vserver", "vserver"), ("Volume", "volume"), ("LUN", "lun"), ("LUN Path", "path"), ("Size", "size"), ("OS Type", "ostype"), ("Type (Space Reserve / Space Allocation)", lun_type_details), ("Mapped", "mapped"), ("Igroup", "igroup"), ("LUN ID", "lunId"), ("State", "state"), ("Protocol", "protocol"), ("Reporting Nodes", "reportingNodes"),
     ])
 
 
 def add_protocol_igroups(rows: list[list[Any]], igroups: list[dict[str, Any]]) -> None:
-    add_table(rows, "Igroup", ["Vserver", "Igroup", "Protocol", "OS Type", "Mapped LUNs", "Initiators", "Init Details", "Portset"], igroups, [
-        ("Vserver", "vserver"), ("Igroup", "igroup"), ("Protocol", "protocol"), ("OS Type", "ostype"), ("Mapped LUNs", "mappedLuns"), ("Initiators", "initiators"), ("Init Details", "initDetails"), ("Portset", "boundPortset"),
+    add_table(rows, "Igroup", ["Vserver", "Igroup", "OS Type", "Initiators", "Init Details", "Mapped LUNs", "Protocol", "Portset"], igroups, [
+        ("Vserver", "vserver"), ("Igroup", "igroup"), ("OS Type", "ostype"), ("Initiators", "initiators"), ("Init Details", "initDetails"), ("Mapped LUNs", "mappedLuns"), ("Protocol", "protocol"), ("Portset", "boundPortset"),
     ])
 
 
@@ -329,32 +363,31 @@ def build_fcp(report: dict[str, Any]) -> list[list[Any]]:
 
 def build_lun_igroup(report: dict[str, Any]) -> list[list[Any]]:
     rows: list[list[Any]] = []
-    add_table(rows, "LUN", ["Aggregate", "Vserver", "Volume", "LUN", "LUN Path", "Size", "OS Type", "Type", "Mapped", "Igroup", "LUN ID", "Reporting Nodes", "State", "Protocol"], report.get("luns", []), [
-        ("Aggregate", "aggregate"), ("Vserver", "vserver"), ("Volume", "volume"), ("LUN", "lun"), ("LUN Path", "path"), ("Size", "size"), ("OS Type", "ostype"), ("Type", "type"), ("Mapped", "mapped"), ("Igroup", "igroup"), ("LUN ID", "lunId"), ("Reporting Nodes", "reportingNodes"), ("State", "state"), ("Protocol", "protocol"),
-    ])
-    add_table(rows, "Igroup", ["Vserver", "Igroup", "Protocol", "OS Type", "Mapped LUNs", "Initiators", "Init Details", "Portset"], report.get("igroups", []), [
-        ("Vserver", "vserver"), ("Igroup", "igroup"), ("Protocol", "protocol"), ("OS Type", "ostype"), ("Mapped LUNs", "mappedLuns"), ("Initiators", "initiators"), ("Init Details", "initDetails"), ("Portset", "boundPortset"),
-    ])
+    add_protocol_luns(rows, report.get("luns", []))
+    add_protocol_igroups(rows, report.get("igroups", []))
     return rows
 
 
 def build_snapshots(report: dict[str, Any]) -> list[list[Any]]:
     rows: list[list[Any]] = []
-    add_table(rows, "Snapshot List", ["Vserver", "Volume", "Snapshot", "Create Time", "State", "Size", "Total %", "Used %", "Busy", "Owners", "SnapMirror Label", "Comment", "Expiry Time"], report.get("snapshots", []), [
-        ("Vserver", "vserver"), ("Volume", "volume"), ("Snapshot", "snapshot"), ("Create Time", "createTime"), ("State", "state"), ("Size", "size"), ("Total %", "totalPercent"), ("Used %", "usedPercent"), ("Busy", "busy"), ("Owners", "owners"), ("SnapMirror Label", "snapmirrorLabel"), ("Comment", "comment"), ("Expiry Time", "expiryTime"),
+    add_table(rows, "Snapshot List", ["Vserver", "Volume", "Snapshot", "Create Time", "Size"], report.get("snapshots", []), [
+        ("Vserver", "vserver"), ("Volume", "volume"), ("Snapshot", "snapshot"), ("Create Time", "createTime"), ("Size", "size"),
     ])
     return rows
 
 
 def build_replication(report: dict[str, Any]) -> list[list[Any]]:
     rows: list[list[Any]] = []
-    add_table(rows, "SnapMirror Relationship", ["Source Path", "Destination Path", "Type", "State", "Status", "Healthy", "Policy", "Schedule", "Policy Schedule", "Policy Rules", "Cluster Peer", "Vserver", "Peer Vserver", "Lag", "Last Transfer"], report.get("snapmirrors", []), [
-        ("Source Path", "sourcePath"), ("Destination Path", "destinationPath"), ("Type", "type"), ("State", "state"), ("Status", "status"), ("Healthy", "healthy"), ("Policy", "policy"), ("Schedule", "schedule"), ("Policy Schedule", "policySchedule"), ("Policy Rules", "policyRules"), ("Cluster Peer", "clusterPeer"), ("Vserver", "vserver"), ("Peer Vserver", "peerVserver"), ("Lag", "lagTime"), ("Last Transfer", "lastTransfer"),
+    add_table(rows, "SnapMirror Relationship", ["Source Path", "Destination Path", "Type", "State", "Status", "Healthy", "Cluster Peer", "Vserver", "Peer Vserver", "Policy", "Schedule", "Policy Rules", "Policy Schedule", "Lag", "Last Transfer"], report.get("snapmirrors", []), [
+        ("Source Path", "sourcePath"), ("Destination Path", "destinationPath"), ("Type", "type"), ("State", "state"), ("Status", "status"), ("Healthy", "healthy"), ("Cluster Peer", "clusterPeer"), ("Vserver", "vserver"), ("Peer Vserver", "peerVserver"), ("Policy", "policy"), ("Schedule", "schedule"), ("Policy Rules", "policyRules"), ("Policy Schedule", "policySchedule"), ("Lag", "lagTime"), ("Last Transfer", "lastTransfer"),
     ])
     add_table(rows, "SnapMirror List Destination", ["Source Path", "Destination Path", "Type", "Status", "Progress", "Updated", "Source Node", "Relationship ID"], report.get("snapmirrorDestinations", []), [("Source Path", "sourcePath"), ("Destination Path", "destinationPath"), ("Type", "type"), ("Status", "status"), ("Progress", "transferProgress"), ("Updated", "progressLastUpdated"), ("Source Node", "sourceVolumeNode"), ("Relationship ID", "relationshipId")])
-    add_table(rows, "SnapMirror Policy", ["Owner", "Policy", "Type", "Transfer Schedule", "Snapshot Schedule", "Rules", "Total Keep", "Total Rules", "Throttle", "Tries", "Comment"], report.get("snapmirrorPolicies", []), [("Owner", "vserver"), ("Policy", "policy"), ("Type", "type"), ("Transfer Schedule", "transferSchedule"), ("Snapshot Schedule", "snapshotSchedule"), ("Rules", "rules"), ("Total Keep", "totalKeep"), ("Total Rules", "totalRules"), ("Throttle", "throttle"), ("Tries", "tries"), ("Comment", "comment")])
-    add_table(rows, "Cluster Peer", ["Peer Cluster", "Addresses", "Availability"], report.get("clusterPeers", []), [("Peer Cluster", "cluster"), ("Addresses", "peerAddresses"), ("Availability", "availability")])
-    add_table(rows, "Vserver Peer", ["Local Vserver", "Peer Vserver", "Cluster Peer", "State", "Applications", "Peer Cluster UUID"], report.get("vserverPeers", []), [("Local Vserver", "localVserver"), ("Peer Vserver", "peerVserver"), ("Cluster Peer", "clusterPeer"), ("State", "state"), ("Applications", "applications"), ("Peer Cluster UUID", "peerClusterUuid")])
+    add_table(rows, "Cluster Peer", ["Peer Cluster", "Availability", "Address", "Address Family", "Healthy", "Unhealthy"], report.get("clusterPeers", []), [
+        ("Peer Cluster", "cluster"), ("Availability", "availability"), ("Address", "peerAddresses"), ("Address Family", "addressFamily"), ("Healthy", "pairsHealthy"), ("Unhealthy", "pairsUnhealthy"),
+    ])
+    add_table(rows, "Vserver Peer", ["Vserver", "Peer Vserver", "Cluster Peer", "State", "Application"], report.get("vserverPeers", []), [
+        ("Vserver", "localVserver"), ("Peer Vserver", "peerVserver"), ("Cluster Peer", "clusterPeer"), ("State", "state"), ("Application", "applications"),
+    ])
     return rows
 
 
@@ -366,7 +399,7 @@ def build_events(report: dict[str, Any]) -> list[list[Any]]:
 
 def build_licenses(report: dict[str, Any]) -> list[list[Any]]:
     rows: list[list[Any]] = []
-    add_table(rows, "License", ["Node / Serial", "Node", "Serial", "Package", "Type", "Installed"], report.get("licenses", []), [("Node / Serial", "group"), ("Node", "node"), ("Serial", "serial"), ("Package", "package"), ("Type", "type"), ("Installed", "installed")])
+    add_table(rows, "License", ["Node", "Serial", "Package", "Type", "Installed"], report.get("licenses", []), [("Node", "node"), ("Serial", "serial"), ("Package", "package"), ("Type", "type"), ("Installed", "installed")])
     return rows
 
 
@@ -438,7 +471,7 @@ def status_kind(value: Any) -> str:
 def emphasis_columns(table_title: str | None, headers: list[Any]) -> set[int]:
     if table_title == "Network Interface":
         return {idx for idx, header in enumerate(headers) if safe_text(header) in {"Home Port", "Current Port"}}
-    if table_title == "Network Port":
+    if table_title and table_title.startswith("Network Port"):
         return {idx for idx, header in enumerate(headers) if safe_text(header) == "Port"}
     return set()
 

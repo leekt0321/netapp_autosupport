@@ -48,6 +48,16 @@ def xml_rows(path: Path) -> list[dict[str, Any]]:
     except ET.ParseError:
         return []
 
+    field_names: dict[str, str] = {}
+    for elem in root.iter():
+        if local_name(elem.tag) != "field":
+            continue
+        metadata = {local_name(child.tag): (child.text or "").strip() for child in elem}
+        tag = metadata.get("tag", "")
+        smf_name = metadata.get("smf_name", "")
+        if tag and smf_name and tag != smf_name:
+            field_names[tag] = smf_name
+
     rows: list[dict[str, Any]] = []
     for elem in root.iter():
         if not elem.tag.endswith("ROW"):
@@ -57,6 +67,10 @@ def xml_rows(path: Path) -> list[dict[str, Any]]:
             key = local_name(child.tag)
             values = [li.text or "" for li in child.iter() if local_name(li.tag) == "li"]
             row[key] = values if values else (child.text or "")
+        for key, value in list(row.items()):
+            canonical = field_names.get(key)
+            if canonical and canonical not in row:
+                row[canonical] = value
         rows.append(row)
     return rows
 
@@ -160,6 +174,16 @@ def snapshot_size(value: Any) -> str:
     if re.fullmatch(r"\d+", text):
         return bytes_human(int(text))
     return text
+
+
+def percent_of(value: Any, total: Any) -> str:
+    numerator = bytes_value(value)
+    denominator = bytes_value(total)
+    if numerator is None or denominator is None or denominator <= 0:
+        return "-"
+    percentage = numerator / denominator * 100
+    text = f"{percentage:.2f}".rstrip("0").rstrip(".")
+    return f"{text}%"
 
 
 def unique(rows: list[dict[str, Any]], *keys: str) -> list[dict[str, Any]]:
@@ -687,8 +711,39 @@ def snapmirror_key(row: dict[str, Any]) -> tuple[str, str, str]:
 
 
 def lun_space_type(row: dict[str, Any]) -> str:
-    reserve = first_present(row, ["space_reserve", "space-reserve"], "").lower()
-    return "thick" if reserve in {"enabled", "true", "on"} else "thin"
+    reserve = normalize_enabled(first_present(row, [
+        "space_reserve",
+        "space-reserve",
+        "space_reservation",
+        "space-reservation",
+        "space-reservation-enabled",
+    ], ""))
+    if reserve == "enabled":
+        return "thick"
+    if reserve == "disabled":
+        return "thin"
+    return "-"
+
+
+def lun_space_reserve(row: dict[str, Any]) -> str:
+    return normalize_enabled(first_present(row, [
+        "space_reserve",
+        "space-reserve",
+        "space_reservation",
+        "space-reservation",
+        "space-reservation-enabled",
+    ], ""))
+
+
+def lun_space_allocation(row: dict[str, Any]) -> str:
+    return normalize_enabled(first_present(row, [
+        "space_alloc",
+        "space-alloc",
+        "space_allocation",
+        "space-allocation",
+        "space_allocation_enabled",
+        "space-allocation-enabled",
+    ], ""))
 
 
 def protocol_label(value: Any) -> str:
@@ -1246,6 +1301,7 @@ def build_report(folders: list[Path]) -> dict[str, Any]:
             "volume-snapshot.xml",
             "volume-snapshots.xml",
             "volume-snapshot-show.xml",
+            "snapshot_analytics.xml",
             "snapmirror.xml",
             "snapmirror-destination.xml",
             "snapmirror-policy.xml",
@@ -1297,7 +1353,10 @@ def build_report(folders: list[Path]) -> dict[str, Any]:
             "clock.xml",
             "timezone.xml",
         ]:
-            all_rows[filename].extend(asup_rows(folder, filename))
+            rows = asup_rows(folder, filename)
+            for row in rows:
+                row["_source_node"] = node_name
+            all_rows[filename].extend(rows)
 
     lifs = unique(all_rows["network-interface.xml"], "vserver", "vif", "address")
     ports = unique(all_rows["network-ports.xml"], "node", "port")
@@ -1321,6 +1380,15 @@ def build_report(folders: list[Path]) -> dict[str, Any]:
             "volume-snapshots.xml",
             "volume-snapshot-show.xml",
         ],
+    )
+    snapshot_analytics = unique(
+        all_rows["snapshot_analytics.xml"],
+        "instance-uuid",
+        "i",
+        "volume-uuid",
+        "v",
+        "snapshot",
+        "s",
     )
     snapmirror_shows = unique(all_rows["snapmirror.xml"], "relationship-id", "relationship_id", "source_path", "destination_path")
     snapmirror_destinations = unique(all_rows["snapmirror-destination.xml"], "relationship_id", "relationship-id", "source_path", "destination_path")
@@ -1560,33 +1628,79 @@ def build_report(folders: list[Path]) -> dict[str, Any]:
         volume_report.append(item)
         volume_by_key[(item["vserver"], item["volume"])] = item
 
+    volume_by_uuid: dict[str, dict[str, Any]] = {}
+    root_volume_by_node: dict[str, dict[str, Any]] = {}
+    for volume in volumes:
+        for uuid_field in ["vol_uuid", "volume-uuid", "volume_uuid", "i_uuid", "instance-uuid"]:
+            volume_uuid = first_present(volume, [uuid_field], "").lower()
+            if volume_uuid:
+                volume_by_uuid[volume_uuid] = volume
+        source_node = clean(volume.get("_source_node"), "").lower()
+        vserver_name = first_present(volume, ["vserver", "vs"], "").lower()
+        volume_name = first_present(volume, ["volume", "vol"], "").lower()
+        if source_node and vserver_name == source_node and volume_name == "vol0":
+            root_volume_by_node[source_node] = volume
+
+    snapshot_analytics_by_id = {
+        first_present(row, ["instance-uuid", "i"], "").lower(): row
+        for row in snapshot_analytics
+        if first_present(row, ["instance-uuid", "i"], "")
+    }
+
     snapshot_report = []
     snapshot_seen: set[tuple[str, str, str]] = set()
     for snapshot in snapshot_rows:
-        vserver = first_present(snapshot, ["vserver", "vserver-name", "svm", "vs", "v"])
-        volume = first_present(snapshot, ["volume", "volume-name", "vol", "vo"])
-        name = first_present(snapshot, ["snapshot", "snapshot-name", "name", "snap", "s"], "")
+        snapshot_id = first_present(snapshot, ["instance-uuid", "i"], "").lower()
+        analytics = snapshot_analytics_by_id.get(snapshot_id, {})
+        merged_snapshot = {**analytics, **snapshot}
+
+        volume_uuid = first_present(merged_snapshot, ["volume-uuid", "volume_uuid"], "").lower()
+        if not volume_uuid:
+            compact_volume_uuid = first_present(merged_snapshot, ["v"], "")
+            if re.fullmatch(r"[0-9a-fA-F-]{36}", compact_volume_uuid):
+                volume_uuid = compact_volume_uuid.lower()
+        volume_row = volume_by_uuid.get(volume_uuid, {})
+        if not volume_row and not volume_uuid:
+            source_node = clean(merged_snapshot.get("_source_node"), "").lower()
+            volume_row = root_volume_by_node.get(source_node, {})
+
+        vserver = first_present(merged_snapshot, ["vserver", "vserver-name", "svm", "vs"], "")
+        volume = first_present(merged_snapshot, ["volume", "volume-name", "vol", "vo"], "")
+        if not vserver:
+            vserver = first_present(volume_row, ["vserver", "vs"], "-")
+        if not volume:
+            volume = first_present(volume_row, ["volume", "vol"], "-")
+
+        name = first_present(merged_snapshot, ["snapshot", "snapshot-name", "name", "snap", "s"], "")
         if not name:
             continue
         identity = (vserver, volume, name)
         if identity in snapshot_seen:
             continue
         snapshot_seen.add(identity)
+        size_value = first_present(merged_snapshot, ["size", "snapshot-size", "total", "cumulative-total", "sz", "z"], "")
+        total_percent = first_present(merged_snapshot, ["percent-total-blocks", "percentage-of-total-blocks", "cumulative-percentage-of-total-blocks", "total-percent"], "")
+        used_percent = first_present(merged_snapshot, ["percent-used-blocks", "percentage-of-used-blocks", "cumulative-percentage-of-used-blocks", "used-percent"], "")
+        if not total_percent:
+            total_percent = percent_of(size_value, first_present(volume_row, ["total", "size"], ""))
+        if not used_percent:
+            used_percent = percent_of(size_value, first_present(volume_row, ["used"], ""))
+
         snapshot_report.append(
             {
                 "vserver": vserver,
                 "volume": volume,
                 "snapshot": name,
-                "createTime": first_present(snapshot, ["create-time", "creation-time", "create_time", "creation_time", "access-time", "ct"]),
-                "state": first_present(snapshot, ["state", "snapshot-state"]),
-                "size": snapshot_size(first_present(snapshot, ["size", "snapshot-size", "total", "cumulative-total", "sz"])),
-                "totalPercent": first_present(snapshot, ["percent-total-blocks", "percentage-of-total-blocks", "total-percent"]),
-                "usedPercent": first_present(snapshot, ["percent-used-blocks", "percentage-of-used-blocks", "used-percent"]),
-                "busy": first_present(snapshot, ["busy", "snapshot-busy"]),
-                "owners": first_present(snapshot, ["owners", "owner", "snapshot-owners", "o"]),
-                "snapmirrorLabel": first_present(snapshot, ["snapmirror-label", "snapmirror_label", "label"]),
-                "comment": first_present(snapshot, ["comment", "snapshot-comment"]),
-                "expiryTime": first_present(snapshot, ["expiry-time", "expiry_time", "snaplock-expiry-time", "sl_exp"]),
+                "createTime": first_present(merged_snapshot, ["create-time", "creation-time", "create_time", "creation_time", "access-time", "ct", "t"]),
+                "state": first_present(merged_snapshot, ["state", "snapshot-state"]),
+                "size": snapshot_size(size_value),
+                "totalPercent": total_percent or "-",
+                "usedPercent": used_percent or "-",
+                "busy": first_present(merged_snapshot, ["busy", "snapshot-busy", "is-busy", "is_busy"]),
+                "owners": first_present(merged_snapshot, ["owners", "owner", "snapshot-owners", "snapshot-owners-list", "owners-list", "o"]),
+                "snapmirrorLabel": first_present(merged_snapshot, ["snapmirror-label", "snapmirror_label", "label"]),
+                "comment": first_present(merged_snapshot, ["comment", "snapshot-comment"]),
+                "expiryTime": first_present(merged_snapshot, ["expiry-time", "expiry_time", "snaplock-expiry-time", "infinite-snaplock-expiry-time", "sl_exp", "xp"]),
             }
         )
 
@@ -1686,6 +1800,8 @@ def build_report(folders: list[Path]) -> dict[str, Any]:
                 "sizeBytes": lun_size_bytes,
                 "ostype": first_present(lun, ["os_type", "os-type"]),
                 "type": lun_space_type(lun),
+                "spaceReserve": lun_space_reserve(lun),
+                "spaceAllocation": lun_space_allocation(lun),
                 "mapped": first_present(lun, ["mapped"], "true" if maps else "false"),
                 "igroup": join_unique([igroup.get("name") for igroup in mapped_igroups]),
                 "lunId": join_unique([lun_map.get("lun_id") for lun_map in maps]),
@@ -1860,8 +1976,19 @@ def build_report(folders: list[Path]) -> dict[str, Any]:
         for row in failover_groups
     ]
 
-    peer_by_vserver = {clean(p.get("local_vserver_name"), ""): p for p in vserver_peers}
-    peer_by_vserver.update({clean(p.get("peer_vserver_name"), ""): p for p in vserver_peers})
+    peer_by_pair = {
+        (
+            clean(p.get("local_vserver_name"), "").lower(),
+            clean(p.get("peer_vserver_name"), "").lower(),
+        ): p
+        for p in vserver_peers
+    }
+    peers_by_vserver: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for peer_row in vserver_peers:
+        for name in [peer_row.get("local_vserver_name"), peer_row.get("peer_vserver_name")]:
+            key = clean(name, "").lower()
+            if key and peer_row not in peers_by_vserver[key]:
+                peers_by_vserver[key].append(peer_row)
     peer_by_uuid = {clean(p.get("cluster_UUID"), ""): p for p in cluster_peers}
     cluster_peer_health_by_uuid = {clean(p.get("cluster_uuid"), ""): p for p in cluster_peer_health_rows}
 
@@ -1888,8 +2015,31 @@ def build_report(folders: list[Path]) -> dict[str, Any]:
             opposite_vserver = source_vserver
         else:
             opposite_vserver = destination_vserver or source_vserver or "-"
-        peer = peer_by_vserver.get(local_vserver) or peer_by_vserver.get(source_vserver) or peer_by_vserver.get(destination_vserver) or {}
+        pair_candidates = [
+            (local_vserver, opposite_vserver),
+            (local_vserver, source_vserver),
+            (local_vserver, destination_vserver),
+            (source_vserver, destination_vserver),
+            (destination_vserver, source_vserver),
+        ]
+        peer = next(
+            (
+                peer_by_pair[(local.lower(), remote.lower())]
+                for local, remote in pair_candidates
+                if local and remote and (local.lower(), remote.lower()) in peer_by_pair
+            ),
+            {},
+        )
+        if not peer:
+            for vserver_name in [opposite_vserver, local_vserver, source_vserver, destination_vserver]:
+                candidates = peers_by_vserver.get(vserver_name.lower(), []) if vserver_name else []
+                if len(candidates) == 1:
+                    peer = candidates[0]
+                    break
         cluster_peer = peer_by_uuid.get(clean(peer.get("peer_cluster_UUID"), ""), {})
+        if peer:
+            local_vserver = first_present(peer, ["local_vserver_name"], local_vserver)
+            opposite_vserver = first_present(peer, ["peer_vserver_name"], opposite_vserver)
         policy = find_snapmirror_policy(row, sm_policy_by_owner, sm_policy_by_name, cluster_name)
 
         item = snapmirror_report_map.get(key)
