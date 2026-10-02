@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NetApp AutoSupport 구성 리포트</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <aside class="rail" aria-label="Report sections">
+      <div class="rail__brand">ASUP</div>
+      <nav>
+        <a href="#overview">개요</a>
+        <a href="#ingest">업로드</a>
+        <a href="#hardware">하드웨어</a>
+        <a href="#network">네트워크</a>
+        <a href="#cifs">CIFS</a>
+        <a href="#nfs">NFS</a>
+        <a href="#iscsi">iSCSI</a>
+        <a href="#fcp">FCP</a>
+        <a href="#storage">스토리지</a>
+        <a href="#data">볼륨</a>
+        <a href="#lun-igroup">LUN/Igroup</a>
+        <a href="#snapshots">스냅샷</a>
+        <a href="#replication">복제</a>
+        <a href="#events">이벤트</a>
+        <a href="#licenses">라이선스</a>
+        <a href="#raw">원문</a>
+      </nav>
+    </aside>
+
+    <main class="shell">
+      <section class="mast" id="overview">
+        <div>
+          <p class="eyebrow">NetApp ONTAP AutoSupport Analyzer</p>
+          <h1 id="clusterTitle">구성 리포트</h1>
+          <p class="subtle" id="sourceLine"></p>
+        </div>
+        <div class="mast__actions">
+          <button class="button button--dark" id="excelExportButton" type="button">Excel</button>
+          <button class="button" id="exportButton" type="button">JSON</button>
+        </div>
+      </section>
+
+      <section class="section ingest" id="ingest">
+        <div class="section__head">
+          <h2>업로드 및 저장</h2>
+          <p>원본은 분석 후 버리고, 작은 JSON 리포트만 저장합니다</p>
+        </div>
+        <div class="ingest-grid">
+          <form id="uploadForm" class="upload-panel">
+            <label class="drop-zone">
+              <span>AutoSupport 압축 파일</span>
+              <strong>.7z 또는 .zip 여러 개 선택</strong>
+              <input id="archiveInput" name="files" type="file" multiple accept=".7z,.zip" />
+            </label>
+            <label class="drop-zone">
+              <span>압축 해제된 폴더</span>
+              <strong>system-info.xml이 들어있는 폴더 선택</strong>
+              <input id="folderInput" name="folderFiles" type="file" webkitdirectory multiple />
+            </label>
+            <div class="upload-actions">
+              <button class="button button--dark" id="uploadButton" type="submit">분석하고 JSON 저장</button>
+              <p id="uploadStatus" class="subtle">로컬 서버 실행 시 업로드 기능을 사용할 수 있습니다.</p>
+            </div>
+          </form>
+          <aside class="library">
+            <div class="library__head">
+              <h3>저장된 리포트</h3>
+              <button class="button" id="refreshReportsButton" type="button">새로고침</button>
+            </div>
+            <p class="storage-path" id="storagePathLine">저장 위치 확인 중...</p>
+            <div id="reportLibrary" class="report-library"></div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="metrics" id="metricGrid"></section>
+
+      <section class="section">
+        <div class="section__head">
+          <h2>컨트롤러 및 관리 IP</h2>
+          <p>hostname, serial, model, ONTAP, cluster/node/SP 관리 IP</p>
+        </div>
+        <div id="nodeCards" class="node-grid"></div>
+      </section>
+
+      <section class="section" id="hardware">
+        <div class="section__head">
+          <h2>쉘프 및 디스크</h2>
+          <p>쉘프 수량과 모듈 펌웨어, 디스크 모델·용량·펌웨어 집계</p>
+        </div>
+        <div id="shelfList" class="shelf-list"></div>
+        <div class="table-wrap">
+          <table id="diskTable"></table>
+        </div>
+      </section>
+
+      <section class="section" id="network">
+        <div class="section__head">
+          <h2>네트워크</h2>
+          <p>LIF, 포트 사용 여부, role, link, speed</p>
+        </div>
+        <div class="tabs">
+          <button class="tab is-active" data-tab="lif">Network Interface</button>
+          <button class="tab" data-tab="port">Network Port</button>
+          <button class="tab" data-tab="failoverGroup">Failover Group</button>
+        </div>
+        <div class="table-wrap tab-panel is-active" id="lifPanel">
+          <table id="lifTable"></table>
+        </div>
+        <div class="table-wrap tab-panel" id="portPanel">
+          <table id="portTable"></table>
+        </div>
+        <div class="table-wrap tab-panel" id="failoverGroupPanel">
+          <table id="failoverGroupTable"></table>
+        </div>
+      </section>
+
+      <section class="section" id="cifs">
+        <div class="section__head">
+          <h2>CIFS / SMB</h2>
+          <p>CIFS server, share, AD/Workgroup 구성 확인</p>
+        </div>
+        <div class="table-wrap">
+          <table id="cifsServerTable"></table>
+        </div>
+        <div class="table-wrap wide">
+          <table id="cifsShareTable"></table>
+        </div>
+      </section>
+
+      <section class="section" id="nfs">
+        <div class="section__head">
+          <h2>NFS</h2>
+          <p>NFS 활성 가능 LIF와 export rule이 연결된 volume 구성. 실제 트래픽 사용 여부와는 구분됩니다.</p>
+        </div>
+        <h3 class="table-title">NFS Server</h3>
+        <div class="table-wrap wide"><table id="nfsServerTable"></table></div>
+        <h3 class="table-title">NFS-enabled LIF</h3>
+        <div class="table-wrap wide"><table id="nfsLifTable"></table></div>
+        <h3 class="table-title">NFS Export Rule</h3>
+        <div class="table-wrap wide"><table id="nfsExportRuleTable"></table></div>
+        <h3 class="table-title">NFS Export Volume</h3>
+        <div class="table-wrap wide"><table id="nfsVolumeTable"></table></div>
+      </section>
+
+      <section class="section" id="iscsi">
+        <div class="section__head">
+          <h2>iSCSI</h2>
+          <p>iSCSI protocol LIF, LUN, igroup 구성</p>
+        </div>
+        <h3 class="table-title">iSCSI LIF</h3>
+        <div class="table-wrap wide"><table id="iscsiLifTable"></table></div>
+        <h3 class="table-title">iSCSI LUN</h3>
+        <div class="table-wrap wide"><table id="iscsiLunTable"></table></div>
+        <h3 class="table-title">iSCSI Igroup</h3>
+        <div class="table-wrap wide"><table id="iscsiIgroupTable"></table></div>
+      </section>
+
+      <section class="section" id="fcp">
+        <div class="section__head">
+          <h2>FCP</h2>
+          <p>FCP protocol LIF, adapter, LUN, igroup 구성</p>
+        </div>
+        <h3 class="table-title">FCP LIF</h3>
+        <div class="table-wrap wide"><table id="fcpLifTable"></table></div>
+        <h3 class="table-title">FCP Adapter</h3>
+        <div class="table-wrap wide"><table id="fcpAdapterTable"></table></div>
+        <h3 class="table-title">FCP LUN</h3>
+        <div class="table-wrap wide"><table id="fcpLunTable"></table></div>
+        <h3 class="table-title">FCP Igroup</h3>
+        <div class="table-wrap wide"><table id="fcpIgroupTable"></table></div>
+      </section>
+
+      <section class="section" id="storage">
+        <div class="section__head">
+          <h2>Aggregate 및 Spare</h2>
+          <p>disk type, usable size, maxraid, diskcount, root/data spare 구분</p>
+        </div>
+        <div class="table-wrap">
+          <table id="aggrTable"></table>
+        </div>
+        <div class="table-wrap">
+          <table id="spareTable"></table>
+        </div>
+      </section>
+
+      <section class="section" id="data">
+        <div class="section__head">
+          <h2>Volume</h2>
+          <p>space guarantee, snapshot policy schedule/count</p>
+        </div>
+        <h3 class="table-title">Volume</h3>
+        <div class="table-wrap wide">
+          <table id="volumeTable"></table>
+        </div>
+      </section>
+
+      <section class="section" id="lun-igroup">
+        <div class="section__head">
+          <h2>LUN 및 Igroup</h2>
+          <p>전체 SAN LUN과 igroup 매핑</p>
+        </div>
+        <h3 class="table-title">LUN</h3>
+        <div class="table-wrap wide">
+          <table id="lunTable"></table>
+        </div>
+        <h3 class="table-title">Igroup</h3>
+        <div class="table-wrap wide">
+          <table id="igroupTable"></table>
+        </div>
+      </section>
+
+      <section class="section" id="snapshots">
+        <div class="section__head">
+          <h2>Snapshot</h2>
+          <p>볼륨별 Snapshot 생성 시간, 크기, 사용률, owner, SnapMirror label</p>
+        </div>
+        <div class="table-wrap wide">
+          <table id="snapshotTable"></table>
+        </div>
+      </section>
+
+      <section class="section" id="replication">
+        <div class="section__head">
+          <h2>SnapMirror</h2>
+          <p>snapmirror show, list-destination, policy, cluster/vserver peer</p>
+        </div>
+        <h3 class="table-title">SnapMirror Relationship</h3>
+        <div class="table-wrap wide">
+          <table id="snapmirrorTable"></table>
+        </div>
+        <h3 class="table-title">SnapMirror List Destination</h3>
+        <div class="table-wrap wide">
+          <table id="snapmirrorDestinationTable"></table>
+        </div>
+        <h3 class="table-title">SnapMirror Policy</h3>
+        <div class="table-wrap wide">
+          <table id="snapmirrorPolicyTable"></table>
+        </div>
+        <h3 class="table-title">Cluster Peer</h3>
+        <div class="table-wrap wide">
+          <table id="clusterPeerTable"></table>
+        </div>
+        <h3 class="table-title">Vserver Peer</h3>
+        <div class="table-wrap wide">
+          <table id="vserverPeerTable"></table>
+        </div>
+      </section>
+
+
+      <section class="section" id="events">
+        <div class="section__head">
+          <h2>Event Log</h2>
+          <p>alert, error, emergency severity event</p>
+        </div>
+        <div class="table-wrap">
+          <table id="eventLogTable"></table>
+        </div>
+      </section>
+
+      <section class="section" id="licenses">
+        <div class="section__head">
+          <h2>License</h2>
+          <p>package, serial, entitlement state</p>
+        </div>
+        <div class="table-wrap">
+          <table id="licenseTable"></table>
+        </div>
+      </section>
+
+      <section class="section" id="raw">
+        <div class="section__head">
+          <h2>sysconfig -a / -ca</h2>
+          <p>장비 구성과 구성 오류 원문 확인</p>
+        </div>
+        <div class="raw-columns">
+          <div>
+            <h3>sysconfig -a</h3>
+            <div id="sysconfigARaw" class="raw-list"></div>
+          </div>
+          <div>
+            <h3>sysconfig -ca</h3>
+            <div id="sysconfigRaw" class="raw-list"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script src="report-data.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

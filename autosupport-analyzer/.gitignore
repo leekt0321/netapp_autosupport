@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.venv/
+uploads/
+work/
+reports/
+report-data.js
+server-test*.log
